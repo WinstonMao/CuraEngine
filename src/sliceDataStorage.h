@@ -4,23 +4,27 @@
 #ifndef SLICE_DATA_STORAGE_H
 #define SLICE_DATA_STORAGE_H
 
-#include "gcodeExport.h" // CoastingConfig
-#include "mesh.h"
-#include "MeshGroup.h"
+#include <map>
 #include "PrimeTower.h"
+#include "RetractionConfig.h"
 #include "SupportInfillPart.h"
 #include "TopSurface.h"
-#include "infill/SierpinskiFillProvider.h"
+#include "settings/Settings.h" //For MAX_EXTRUDERS.
 #include "settings/types/AngleDegrees.h" //Infill angles.
 #include "settings/types/LayerIndex.h"
 #include "utils/AABB.h"
+#include "utils/AABB3D.h"
 #include "utils/IntPoint.h"
 #include "utils/NoCopy.h"
 #include "utils/optional.h"
 #include "utils/polygon.h"
+#include "WipeScriptConfig.h"
 
 namespace cura 
 {
+
+class Mesh;
+class SierpinskiFillProvider;
 
 /*!
  * A SkinPart is a connected area designated as top and/or bottom skin. 
@@ -132,8 +136,6 @@ public:
      * \return the own infill area
      */
     const Polygons& getOwnInfillArea() const;
-
-    std::vector<std::pair<Polygons, double>> spaghetti_infill_volumes; //!< For each filling volume on this layer, the area within which to fill and the total volume (in mm3) to fill over the area
 };
 
 /*!
@@ -216,6 +218,11 @@ public:
 
     int layer_nr_max_filled_layer; //!< the layer number of the uppermost layer with content
 
+    std::vector<AngleDegrees> support_infill_angles; //!< a list of angle values which is cycled through to determine the infill angle of each layer
+    std::vector<AngleDegrees> support_infill_angles_layer_0; //!< a list of angle values which is cycled through to determine the infill angle of each layer
+    std::vector<AngleDegrees> support_roof_angles; //!< a list of angle values which is cycled through to determine the infill angle of each layer
+    std::vector<AngleDegrees> support_bottom_angles; //!< a list of angle values which is cycled through to determine the infill angle of each layer
+
     std::vector<SupportLayer> supportLayers;
     SierpinskiFillProvider* cross_fill_provider; //!< the fractal pattern for the cross (3d) filling pattern
 
@@ -292,12 +299,15 @@ public:
     AABB3D machine_size; //!< The bounding box with the width, height and depth of the printer.
     std::vector<SliceMeshStorage> meshes;
 
+    std::vector<WipeScriptConfig> wipe_config_per_extruder; //!< Wipe configs per extruder.
+
     std::vector<RetractionConfig> retraction_config_per_extruder; //!< Retraction config per extruder.
     std::vector<RetractionConfig> extruder_switch_retraction_config_per_extruder; //!< Retraction config per extruder for when performing an extruder switch
 
     SupportStorage support;
 
     Polygons skirt_brim[MAX_EXTRUDERS]; //!< Skirt and brim polygons per extruder, ordered from inner to outer polygons.
+    size_t skirt_brim_max_locked_part_order[MAX_EXTRUDERS]; //!< Some parts (like skirt) always need to be printed before parts like support-brim, so lock 0..n for each extruder, where n is the value saved in this array.
     Polygons raftOutline;               //Storage for the outline of the raft. Will be filled with lines when the GCode is generated.
 
     int max_print_height_second_to_last_extruder; //!< Used in multi-extrusion: the layer number beyond which all models are printed with the same extruder
@@ -331,8 +341,9 @@ public:
      * \param include_prime_tower Whether to include the prime tower in the
      * outline.
      * \param external_polys_only Whether to disregard all hole polygons.
+     * \param for_brim Whether the outline is to be used to construct the brim.
      */
-    Polygons getLayerOutlines(const LayerIndex layer_nr, const bool include_support, const bool include_prime_tower, const bool external_polys_only = false) const;
+    Polygons getLayerOutlines(const LayerIndex layer_nr, const bool include_support, const bool include_prime_tower, const bool external_polys_only = false, const bool for_brim = false) const;
 
     /*!
      * Get the extruders used.
@@ -372,6 +383,11 @@ private:
      * Construct the retraction_config_per_extruder
      */
     std::vector<RetractionConfig> initializeRetractionConfigs();
+
+    /*!
+     * Construct the wipe_config_per_extruder
+     */
+    std::vector<WipeScriptConfig> initializeWipeConfigs();
 };
 
 }//namespace cura

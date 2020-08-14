@@ -2,6 +2,9 @@
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #include "layerPart.h"
+#include "sliceDataStorage.h"
+#include "slicer.h"
+#include "settings/EnumSettings.h" //For ESurfaceMode.
 #include "settings/Settings.h"
 #include "progress/Progress.h"
 
@@ -34,14 +37,54 @@ void createLayerWithParts(const Settings& settings, SliceLayer& storageLayer, Sl
                 layer->polygons[i].reverse();
         }
     }
-    
+
     std::vector<PolygonsPart> result;
     const bool union_layers = settings.get<bool>("meshfix_union_all");
-    result = layer->polygons.splitIntoParts(union_layers || union_all_remove_holes);
+    const ESurfaceMode surface_only = settings.get<ESurfaceMode>("magic_mesh_surface_mode");
+    if (surface_only == ESurfaceMode::SURFACE && !union_layers)
+    { // Don't do anything with overlapping areas; no union nor xor
+        result.reserve(layer->polygons.size());
+        for (const PolygonRef poly : layer->polygons)
+        {
+            result.emplace_back();
+            result.back().add(poly);
+        }
+    }
+    else
+    {
+        result = layer->polygons.splitIntoParts(union_layers || union_all_remove_holes);
+    }
+    const coord_t hole_offset = settings.get<coord_t>("hole_xy_offset");
     for(unsigned int i=0; i<result.size(); i++)
     {
         storageLayer.parts.emplace_back();
-        storageLayer.parts[i].outline = result[i];
+        if (hole_offset != 0)
+        {
+            // holes are to be expanded or shrunk
+            PolygonsPart outline;
+            Polygons holes;
+            for (const PolygonRef poly : result[i])
+            {
+                if (poly.orientation())
+                {
+                    outline.add(poly);
+                }
+                else
+                {
+                    holes.add(poly.offset(hole_offset));
+                }
+            }
+            for (PolygonRef hole : holes.unionPolygons().intersection(outline))
+            {
+                hole.reverse();
+                outline.add(hole);
+            }
+            storageLayer.parts[i].outline = outline;
+        }
+        else
+        {
+            storageLayer.parts[i].outline = result[i];
+        }
         storageLayer.parts[i].boundaryBox.calculate(storageLayer.parts[i].outline);
     }
 }
@@ -49,8 +92,16 @@ void createLayerParts(SliceMeshStorage& mesh, Slicer* slicer)
 {
     const auto total_layers = slicer->layers.size();
     assert(mesh.layers.size() == total_layers);
-#pragma omp parallel for default(none) shared(mesh, slicer) schedule(dynamic)
-    for (unsigned int layer_nr = 0; layer_nr < total_layers; layer_nr++)
+
+    // OpenMP compatibility fix for GCC <= 8 and GCC >= 9
+    // See https://www.gnu.org/software/gcc/gcc-9/porting_to.html, section "OpenMP data sharing"
+#if defined(__GNUC__) && __GNUC__ <= 8
+    #pragma omp parallel for default(none) shared(mesh, slicer) schedule(dynamic)
+#else
+    #pragma omp parallel for default(none) shared(mesh, slicer, total_layers) schedule(dynamic)
+#endif // defined(__GNUC__) && __GNUC__ <= 8
+    // Use a signed type for the loop counter so MSVC compiles (because it uses OpenMP 2.0, an old version).
+    for (int layer_nr = 0; layer_nr < static_cast<int>(total_layers); layer_nr++)
     {
         SliceLayer& layer_storage = mesh.layers[layer_nr];
         SlicerLayer& slice_layer = slicer->layers[layer_nr];

@@ -13,9 +13,9 @@
 find_package(PkgConfig QUIET)
 pkg_check_modules(PC_Stb QUIET Stb)
 
-find_path(Stb_INCLUDE_DIRS stb_image_resize.h #Search for something that is a little less prone to false positives than just stb.h.
+find_path(Stb_INCLUDE_DIRS stb/stb_image_resize.h #Search for something that is a little less prone to false positives than just stb.h.
     HINTS ${PC_Stb_INCLUDEDIR} ${PC_Stb_INCLUDE_DIRS}
-    PATHS "$ENV{PROGRAMFILES}/stb" "$ENV{PROGRAMW6432}/stb"
+    PATHS "$ENV{PROGRAMFILES}" "$ENV{PROGRAMW6432}" "/usr/include"
     PATH_SUFFIXES include/stb stb include
 )
 
@@ -42,8 +42,11 @@ else()
         endif()
 
         include(ExternalProject)
+        # Stb's commits in early February seems to cause the engine to fail compilation on Mac.
         ExternalProject_Add(stb
             GIT_REPOSITORY "https://github.com/nothings/stb.git"
+            GIT_TAG d5d052c806eee2ca1f858cb58b2f062d9fa25b90
+            UPDATE_DISCONNECTED TRUE
             CONFIGURE_COMMAND "" #We don't want to actually go and build/test/generate it. Just need to download the headers.
             BUILD_COMMAND ""
             INSTALL_COMMAND "" #Assume that the user doesn't want to install all dependencies on his system. We just need to get them for building the application.

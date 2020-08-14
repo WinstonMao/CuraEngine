@@ -7,14 +7,6 @@
 #include <forward_list>
 #include <unordered_set>
 
-#include <memory>
-#include <vector>
-#include <utility>
-#include <unordered_map>
-
-#include "sliceDataStorage.h"
-#include "settings/types/LayerIndex.h"
-
 
 namespace cura
 {
@@ -177,6 +169,9 @@ private:
     mutable std::unordered_map<RadiusLayerPair, Polygons> internal_model_cache_;
 };
 
+class SliceDataStorage;
+class SliceMeshStorage;
+
 /*!
  * \brief Generates a tree structure to support your models.
  */
@@ -235,7 +230,7 @@ public:
         /*!
          * \brief The number of layers to go to the top of this branch.
          */
-        mutable size_t distance_to_top;
+        size_t distance_to_top;
 
         /*!
          * \brief The position of this node on the layer.
@@ -248,7 +243,7 @@ public:
          * This determines in which direction we should reduce the width of the
          * branch.
          */
-        mutable bool skin_direction;
+        bool skin_direction;
 
         /*!
          * \brief The number of support roof layers below this one.
@@ -258,7 +253,7 @@ public:
          * per-mesh setting. This is stored in this variable in order to track
          * how far we need to extend that support roof downwards.
          */
-        mutable int support_roof_layers_below;
+        int support_roof_layers_below;
 
         /*!
          * \brief Whether to try to go towards the build plate.
@@ -267,7 +262,7 @@ public:
          * towards the model. If it is not inside the collision areas, it must
          * go towards the build plate to prevent a scar on the surface.
          */
-        mutable bool to_buildplate;
+        bool to_buildplate;
 
         /*!
          * \brief The originating node for this one, one layer higher.
@@ -285,7 +280,7 @@ public:
         * can't be on the model and the path to the buildplate isn't clear),
         * the entire branch needs to be known.
         */
-        mutable std::forward_list<Node*> merged_neighbours;
+        std::forward_list<Node*> merged_neighbours;
 
         bool operator==(const Node& other) const
         {
@@ -312,7 +307,7 @@ private:
      * save the resulting support polygons to.
      * \param contact_nodes The nodes to draw as support.
      */
-    void drawCircles(SliceDataStorage& storage, const std::vector<std::unordered_set<Node*>>& contact_nodes);
+    void drawCircles(SliceDataStorage& storage, const std::vector<std::vector<Node*>>& contact_nodes);
 
     /*!
      * \brief Drops down the nodes of the tree support towards the build plate.
@@ -326,7 +321,7 @@ private:
      * dropped down. The nodes are dropped to lower layers inside the same
      * vector of layers.
      */
-    void dropNodes(std::vector<std::unordered_set<Node*>>& contact_nodes);
+    void dropNodes(std::vector<std::vector<Node*>>& contact_nodes);
 
     /*!
      * \brief Creates points where support contacts the model.
@@ -341,14 +336,14 @@ private:
      * \return For each layer, a list of points where the tree should connect
      * with the model.
      */
-    void generateContactPoints(const SliceMeshStorage& mesh, std::vector<std::unordered_set<Node*>>& contact_nodes);
+    void generateContactPoints(const SliceMeshStorage& mesh, std::vector<std::vector<Node*>>& contact_nodes);
 
     /*!
      * \brief Add a node to the next layer.
      *
      * If a node is already at that position in the layer, the nodes are merged.
      */
-    void insertDroppedNode(std::unordered_set<Node*>& nodes_layer, Node* node);
+    void insertDroppedNode(std::vector<Node*>& nodes_layer, Node* node);
 };
 
 }

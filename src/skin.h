@@ -4,10 +4,16 @@
 #ifndef SKIN_H
 #define SKIN_H
 
-#include "sliceDataStorage.h"
+#include "settings/types/LayerIndex.h"
+#include "utils/Coord_t.h"
 
 namespace cura 
 {
+
+class Polygons;
+class SkinPart;
+class SliceLayerPart;
+class SliceMeshStorage;
 
 /*!
  * Class containing all skin and infill area computation functions
@@ -121,12 +127,29 @@ protected:
     void generateInfill(SliceLayerPart& part, const Polygons& skin);
 
     /*!
-     * Calculate the areas which are 'directly' under air,
-     * remove them from the \ref SkinPart::inner_infill and save them in the \ref SkinPart::roofing_fill of the \p part
+     * Remove the areas which are 'directly' under air from the \ref SkinPart::inner_infill and 
+     * save them in the \ref SkinPart::roofing_fill of the \p part.
      * 
-     * \param[in,out] part Where to get the sSkinParts to get the outline info from and to store the roofing areas
+     * \param[in,out] part Where to get the SkinParts to get the outline info from and to store the roofing areas
      */
     void generateRoofing(SliceLayerPart& part);
+
+    /*!
+     * Helper function to calculate and return the areas which are 'directly' under air.
+     *
+     * \param part Where to get the SkinParts to get the outline info from
+     */
+    Polygons generateNoAirAbove(SliceLayerPart& part);
+
+    /*!
+     * Helper function to recalculate the roofing fill and inner infill in roofing layers where the 
+     * insets have to be changed.
+     *
+     * \param part Where to get the SkinParts to get the outline info from
+     * \param skin_part The part where the skin outline information (input) is stored and
+     * where the inner infill and roofing infill areas (output) is stored.
+     */
+    void regenerateRoofingFillAndInnerInfill(SliceLayerPart& part, SkinPart& skin_part);
 
     /*!
      * Generate the skin insets and the inner infill area
@@ -156,6 +179,7 @@ protected:
     const LayerIndex layer_nr; //!< The index of the layer for which to generate the skins and infill.
     SliceMeshStorage& mesh; //!< The storage where the layer outline information (input) is stored and where the skin insets and fill areas (output) are stored.
     const size_t bottom_layer_count; //!< The number of layers of bottom skin
+    const size_t initial_bottom_layer_count; //!< Whether to make bottom skin for the initial layer
     const size_t top_layer_count; //!< The number of layers of top skin
     const size_t wall_line_count; //!< The number of walls, i.e. the number of the wall from which to offset.
     const coord_t skin_line_width; //!< The line width of the skin.

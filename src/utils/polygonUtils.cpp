@@ -1,12 +1,14 @@
-/** Copyright (C) 2015 Ultimaker - Released under terms of the AGPLv3 License */
-#include "polygonUtils.h"
+//Copyright (c) 2018 Ultimaker B.V.
+//CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #include <list>
 #include <sstream>
 #include <unordered_set>
 
 #include "linearAlg2D.h"
+#include "polygonUtils.h"
 #include "SparsePointGridInclusive.h"
+#include "../utils/logoutput.h"
 
 #ifdef DEBUG
 #include "AABB.h"
@@ -231,24 +233,27 @@ unsigned int PolygonUtils::moveInside(const Polygons& polygons, Point& from, int
             continue;
         Point p0 = poly[poly.size()-2];
         Point p1 = poly.back();
+        // because we compare with vSize2 here (no division by zero), we also need to compare by vSize2 inside the loop
+        // to avoid integer rounding edge cases
         bool projected_p_beyond_prev_segment = dot(p1 - p0, from - p0) >= vSize2(p1 - p0);
         for(const Point& p2 : poly)
         {   
-            // X = A + Normal( B - A ) * ((( B - A ) dot ( P - A )) / VSize( A - B ));
+            // X = A + Normal(B-A) * (((B-A) dot (P-A)) / VSize(B-A));
+            //   = A +       (B-A) *  ((B-A) dot (P-A)) / VSize2(B-A);
             // X = P projected on AB
             const Point& a = p1;
             const Point& b = p2;
             const Point& p = from;
             Point ab = b - a;
             Point ap = p - a;
-            int64_t ab_length = vSize(ab);
-            if(ab_length <= 0) //A = B, i.e. the input polygon had two adjacent points on top of each other.
+            int64_t ab_length2 = vSize2(ab);
+            if(ab_length2 <= 0) //A = B, i.e. the input polygon had two adjacent points on top of each other.
             {
                 p1 = p2; //Skip only one of the points.
                 continue;
             }
-            int64_t ax_length = dot(ab, ap) / ab_length;
-            if (ax_length <= 0) // x is projected to before ab
+            int64_t dot_prod = dot(ab, ap);
+            if (dot_prod <= 0) // x is projected to before ab
             {
                 if (projected_p_beyond_prev_segment)
                 { //  case which looks like:   > .
@@ -278,7 +283,7 @@ unsigned int PolygonUtils::moveInside(const Polygons& polygons, Point& from, int
                     continue;
                 }
             }
-            else if (ax_length >= ab_length) // x is projected to beyond ab
+            else if (dot_prod >= ab_length2) // x is projected to beyond ab
             {
                 projected_p_beyond_prev_segment = true;
                 p0 = p1;
@@ -288,7 +293,7 @@ unsigned int PolygonUtils::moveInside(const Polygons& polygons, Point& from, int
             else 
             { // x is projected to a point properly on the line segment (not onto a vertex). The case which looks like | .
                 projected_p_beyond_prev_segment = false;
-                Point x = a + ab * ax_length / ab_length;
+                Point x = a + ab * dot_prod / ab_length2;
 
                 int64_t dist2 = vSize2(p - x);
                 if (dist2 < bestDist2)
@@ -350,24 +355,27 @@ unsigned int PolygonUtils::moveInside(const ConstPolygonRef polygon, Point& from
     }
     Point p0 = polygon[polygon.size() - 2];
     Point p1 = polygon.back();
+    // because we compare with vSize2 here (no division by zero), we also need to compare by vSize2 inside the loop
+    // to avoid integer rounding edge cases
     bool projected_p_beyond_prev_segment = dot(p1 - p0, from - p0) >= vSize2(p1 - p0);
     for(const Point& p2 : polygon)
     {
-        // X = A + Normal( B - A ) * ((( B - A ) dot ( P - A )) / VSize( A - B ));
+        // X = A + Normal(B-A) * (((B-A) dot (P-A)) / VSize(B-A));
+        //   = A +       (B-A) *  ((B-A) dot (P-A)) / VSize2(B-A);
         // X = P projected on AB
         const Point& a = p1;
         const Point& b = p2;
         const Point& p = from;
         Point ab = b - a;
         Point ap = p - a;
-        int64_t ab_length = vSize(ab);
-        if(ab_length <= 0) //A = B, i.e. the input polygon had two adjacent points on top of each other.
+        int64_t ab_length2 = vSize2(ab);
+        if(ab_length2 <= 0) //A = B, i.e. the input polygon had two adjacent points on top of each other.
         {
             p1 = p2; //Skip only one of the points.
             continue;
         }
-        int64_t ax_length = dot(ab, ap) / ab_length;
-        if (ax_length <= 0) // x is projected to before ab
+        int64_t dot_prod = dot(ab, ap);
+        if (dot_prod <= 0) // x is projected to before ab
         {
             if (projected_p_beyond_prev_segment)
             { //  case which looks like:   > .
@@ -399,7 +407,7 @@ unsigned int PolygonUtils::moveInside(const ConstPolygonRef polygon, Point& from
                 continue;
             }
         }
-        else if (ax_length >= ab_length) // x is projected to beyond ab
+        else if (dot_prod >= ab_length2) // x is projected to beyond ab
         {
             projected_p_beyond_prev_segment = true;
             p0 = p1;
@@ -409,7 +417,7 @@ unsigned int PolygonUtils::moveInside(const ConstPolygonRef polygon, Point& from
         else
         { // x is projected to a point properly on the line segment (not onto a vertex). The case which looks like | .
             projected_p_beyond_prev_segment = false;
-            Point x = a + ab * ax_length / ab_length;
+            Point x = a + ab * dot_prod / ab_length2;
 
             int64_t dist2 = vSize2(p - x);
             if (dist2 < bestDist2)
@@ -1143,7 +1151,7 @@ std::optional<ClosestPolygonPoint> PolygonUtils::getNextParallelIntersection(con
             const Point segment_vector = next_vert - prev_vert;
             const coord_t segment_length = vSize(segment_vector);
             const coord_t projected_segment_length = std::abs(projected - prev_projected);
-            const char sign = (projected > 0) ? 1 : -1;
+            const int16_t sign = (projected > 0) ? 1 : -1;
             const coord_t projected_inter_segment_length = dist - sign * prev_projected; // add the prev_projected to dist if it is projected to the other side of the input line than where the intersection occurs.
             const coord_t inter_segment_length = segment_length * projected_inter_segment_length / projected_segment_length;
             const Point intersection = prev_vert + normal(next_vert - prev_vert, inter_segment_length);
@@ -1305,6 +1313,44 @@ void PolygonUtils::findAdjacentPolygons(std::vector<unsigned>& adjacent_poly_ind
             adjacent_poly_indices.push_back(poly_idx);
         }
     }
+}
+
+double PolygonUtils::relativeHammingDistance(const Polygons& poly_a, const Polygons& poly_b)
+{
+    const double area_a = std::abs(poly_a.area());
+    const double area_b = std::abs(poly_b.area());
+    const double total_area = area_a + area_b;
+
+    //If the total area is 0.0, we'd get a division by zero. Instead, only return 0.0 if they are exactly equal.
+    constexpr bool borders_allowed = true;
+    if(total_area == 0.0)
+    {
+        for(const ConstPolygonRef& polygon_a : poly_a)
+        {
+            for(Point point : polygon_a)
+            {
+                if(!poly_b.inside(point, borders_allowed))
+                {
+                    return 1.0;
+                }
+            }
+        }
+        for(const ConstPolygonRef& polygon_b : poly_b)
+        {
+            for(Point point : polygon_b)
+            {
+                if(!poly_a.inside(point, borders_allowed))
+                {
+                    return 1.0;
+                }
+            }
+        }
+        return 0.0; //All points are inside the other polygon, regardless of where the vertices are along the edges.
+    }
+
+    const Polygons symmetric_difference = poly_a.xorPolygons(poly_b);
+    const double hamming_distance = symmetric_difference.area();
+    return hamming_distance / total_area;
 }
 
 }//namespace cura

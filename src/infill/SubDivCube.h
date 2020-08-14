@@ -4,12 +4,16 @@
 #ifndef INFILL_SUBDIVCUBE_H
 #define INFILL_SUBDIVCUBE_H
 
-#include "../sliceDataStorage.h"
+#include "../settings/types/Ratio.h"
+#include "../utils/IntPoint.h"
+#include "../utils/Point3.h"
 
 namespace cura
 {
 
-class Infill;
+struct LayerIndex;
+class Polygons;
+class SliceMeshStorage;
 
 class SubDivCube
 {
@@ -28,7 +32,7 @@ public:
      * Precompute the octree of subdivided cubes
      * \param mesh contains infill layer data and settings
      */
-    static void precomputeOctree(SliceMeshStorage& mesh);
+    static void precomputeOctree(SliceMeshStorage& mesh, const Point& infill_origin);
 
     /*!
      * Generates the lines of subdivision of the specific cube at the specific layer. It recursively calls itself, so it ends up drawing all the subdivision lines of sub-cubes too.

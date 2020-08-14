@@ -1,4 +1,4 @@
-//Copyright (c) 2017 Ultimaker B.V.
+//Copyright (c) 2019 Ultimaker B.V.
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
 #include "polygon.h"
@@ -7,7 +7,7 @@
 
 #include "ListPolyIt.h"
 
-namespace cura 
+namespace cura
 {
 
 size_t ConstPolygonRef::size() const
@@ -20,7 +20,7 @@ bool ConstPolygonRef::empty() const
     return path->empty();
 }
 
-bool ConstPolygonRef::shorterThan(int64_t check_length) const
+bool ConstPolygonRef::shorterThan(const coord_t check_length) const
 {
     const ConstPolygonRef& polygon = *this;
     const Point* p0 = &polygon.back();
@@ -44,7 +44,7 @@ bool ConstPolygonRef::_inside(Point p, bool border_result) const
     {
         return false;
     }
-    
+
     int crossings = 0;
     Point p0 = back();
     for(unsigned int n=0; n<size(); n++)
@@ -152,7 +152,7 @@ bool Polygons::insideOld(Point p, bool border_result) const
     {
         return false;
     }
-    
+
     int crossings = 0;
     for (const ClipperLib::Path& poly : thiss)
     {
@@ -181,12 +181,11 @@ unsigned int Polygons::findInside(Point p, bool border_result)
     {
         return false;
     }
-    
-    int64_t min_x[size()];
-    std::fill_n(min_x, size(), std::numeric_limits<int64_t>::max());  // initialize with int.max
-    int crossings[size()];
-    std::fill_n(crossings, size(), 0);  // initialize with zeros
-    
+
+    // NOTE: Keep these vectors fixed-size, they replace an (non-standard, sized at runtime) arrays.
+    std::vector<int64_t> min_x(size(), std::numeric_limits<int64_t>::max());
+    std::vector<int64_t> crossings(size());
+
     for (unsigned int poly_idx = 0; poly_idx < size(); poly_idx++)
     {
         PolygonRef poly = thiss[poly_idx];
@@ -202,7 +201,7 @@ unsigned int Polygons::findInside(Point p, bool border_result)
                 {
                     x = p0.X;
                 }
-                else 
+                else
                 {
                     x = p0.X + (p1.X-p0.X) * (p.Y-p0.Y) / (p1.Y-p0.Y);
                 }
@@ -218,7 +217,7 @@ unsigned int Polygons::findInside(Point p, bool border_result)
             p0 = p1;
         }
     }
-    
+
     int64_t min_x_uneven = std::numeric_limits<int64_t>::max();
     unsigned int ret = NO_INDEX;
     unsigned int n_unevens = 0;
@@ -296,166 +295,97 @@ Polygons ConstPolygonRef::offset(int distance, ClipperLib::JoinType join_type, d
     return ret;
 }
 
-void PolygonRef::simplify(int smallest_line_segment_squared, int allowed_error_distance_squared)
+void PolygonRef::simplify(const coord_t smallest_line_segment_squared, const coord_t allowed_error_distance_squared)
 {
     if (size() < 3)
     {
         clear();
         return;
     }
-
-// Algorithm Explanation:
-// initial: 1
-// after stage I: 2
-// after first step of stage II: 3
-//
-//                       111111111111111111111111111
-//                      1         22 332222         1
-//                     1       222  3  3   222       1
-//                    1      22    3   3      222     1
-//                    1   222      3    3        2222 1
-//                   1 222        3      3           221
-//                  122          3       3              12
-//                 12            3        3              1
-//                 12           3          3             1
-//                1 2          3            3            21
-//               1  2          3            3            21
-//               1  2         3              3          2  1
-//              1    2        3               3         2  1
-//              1    2       3                 3        2   1
-//             1     2      3                  3        2   1
-//              1    2      3                   3       2    1
-//               1    2    3                     3      2    1
-//                1   2   3                      3     2    1
-//                 1  2   3                       3    2   1
-//                  1  2 3                         3   2  1
-//                   1 23                           3  2 1
-//                    123                           3  21
-//                     1                             321
-//                                                    1
-//
-// this is neccesary in order to avoid the case where a long segment is followed by a lot of small segments would get simplified to a long segment going to the wrong end point
-//  .......                _                 _______
-// |                      /                 |
-// |     would become    /    instead of    |
-// |                    /                   |
-//
-// therefore every time a vert is removed the next is kept (for the moment)
-//
-// .......            ._._._._.         .___.___.          .________
-// |                  |                 |                  |
-// |    will  become  |    will become  |     will become  |
-// |                  |                 |                  |
-//
-
-    ClipperLib::Path this_path = *path;
-    coord_t min_length_2 = std::min(smallest_line_segment_squared, allowed_error_distance_squared);
-
-    ListPolygon result_list_poly;
-    result_list_poly.emplace_back(path->front());
-
-    std::vector<ListPolyIt> skipped_verts;
-    // add the first point as starting point for the algorithm
-    // whether the first point has to be removed is checked separately afterwards
-    skipped_verts.emplace_back(result_list_poly, result_list_poly.begin());
-
-    char here_is_beyond_line = 0;
-    { // stage I: convert to a ListPolygon and remove verts, but don't remove verts just after removed verts (i.e. skip them)
-        Point prev = this_path[0];
-        auto skip = [this, &result_list_poly, &this_path, &prev, &skipped_verts](unsigned int& poly_idx)
-        {
-            poly_idx++;
-            if (poly_idx >= size())
-            { // don't wrap around, the first point has already been added
-                return;
-            }
-            result_list_poly.emplace_back(this_path[poly_idx]);
-            prev = result_list_poly.back();
-            skipped_verts.emplace_back(result_list_poly, --result_list_poly.end());
-        };
-
-        for (unsigned int poly_idx = 1; poly_idx < size(); poly_idx++)
-        {
-            const Point& here = this_path[poly_idx];
-            const Point& next = this_path[(poly_idx + 1) % size()];
-            if (here == next)
-            { // disregard duplicate points without skipping the next point
-                continue;
-            }
-            if ( vSize2(here - prev) < min_length_2 && vSize2(next - here) < min_length_2 )
-            {
-                // don't add [here] to the result
-                // skip checking whether the next point has to be removed for now
-                skip(poly_idx);
-                continue;
-            }
-            const coord_t error2 = LinearAlg2D::getDist2FromLineSegment(prev, here, next, &here_is_beyond_line);
-            //Skip the line, if:
-            // - the line is too short and removing the line produces small enough error, or...
-            // - removing the line produces NO error, meaning that two line segments are exactly parallel.
-            if ((here_is_beyond_line == 0 && error2 < allowed_error_distance_squared) || error2 == 0)
-            {
-                // don't add [here] to the result
-                // skip checking whether the next point has to be removed for now
-                skip(poly_idx);
-            }
-            else
-            {
-                result_list_poly.emplace_back(here);
-                prev = result_list_poly.back();
-            }
-        }
-    }
-
-    { // stage II: keep removing skipped verts (and skip the next vert if it was a skipped vert)
-        auto skip = [&skipped_verts, &result_list_poly](unsigned int& skipped_vert_idx, const ListPolyIt skipped_vert, std::vector<ListPolyIt>& new_skipped_verts)
-        {
-            unsigned int next_skipped_vert_idx = skipped_vert_idx + 1;
-            if (next_skipped_vert_idx < skipped_verts.size() && skipped_vert.next() == skipped_verts[next_skipped_vert_idx])
-            {
-                skipped_vert_idx++;
-                new_skipped_verts.emplace_back(skipped_verts[next_skipped_vert_idx]);
-            }
-            result_list_poly.erase(skipped_vert.it);
-        };
-        while (!skipped_verts.empty() && result_list_poly.size() >= 3)
-        {
-            std::vector<ListPolyIt> new_skipped_verts;
-
-            for (unsigned int skipped_vert_idx = 0; skipped_vert_idx < skipped_verts.size(); skipped_vert_idx++)
-            {
-                ListPolyIt skipped_vert = skipped_verts[skipped_vert_idx];
-                const Point& here = skipped_vert.p();
-                const Point& prev = skipped_vert.prev().p();
-
-                const Point& next = skipped_vert.next().p();
-                if ( vSize2(here - prev) < min_length_2 && vSize2(next - here) < min_length_2 )
-                {
-                    // skip checking whether the next point has to be removed for now
-                    skip(skipped_vert_idx, skipped_vert, new_skipped_verts);
-                    continue;
-                }
-                int64_t error2 = LinearAlg2D::getDist2FromLineSegment(prev, here, next, &here_is_beyond_line);
-                if (here_is_beyond_line == 0 && error2 < allowed_error_distance_squared)
-                {
-                    // skip checking whether the next point has to be removed for now
-                    skip(skipped_vert_idx, skipped_vert, new_skipped_verts);
-                }
-                else
-                {
-                    // keep the point
-                }
-            }
-            skipped_verts = new_skipped_verts;
-        }
-    }
-
-    clear();
-    if (result_list_poly.size() < 3)
+    if (size() == 3)
     {
         return;
     }
-    ListPolyIt::convertListPolygonToPolygon(result_list_poly, *this);
+
+    ClipperLib::Path new_path;
+    Point previous = path->back();
+    Point current = path->at(0);
+
+    /* When removing a vertex, we check the height of the triangle of the area
+     being removed from the original polygon by the simplification. However,
+     when consecutively removing multiple vertices the height of the previously
+     removed vertices w.r.t. the shortcut path changes.
+     In order to not recompute the new height value of previously removed
+     vertices we compute the height of a representative triangle, which covers
+     the same amount of area as the area being cut off. We use the Shoelace
+     formula to accumulate the area under the removed segments. This works by
+     computing the area in a 'fan' where each of the blades of the fan go from
+     the origin to one of the segments. While removing vertices the area in
+     this fan accumulates. By subtracting the area of the blade connected to
+     the short-cutting segment we obtain the total area of the cutoff region.
+     From this area we compute the height of the representative triangle using
+     the standard formula for a triangle area: A = .5*b*h
+     */
+    coord_t accumulated_area_removed = previous.X * current.Y - previous.Y * current.X; // Twice the Shoelace formula for area of polygon per line segment.
+
+    for (size_t point_idx = 0; point_idx < size(); point_idx++)
+    {
+        current = path->at(point_idx % size());
+
+        //Check if the accumulated area doesn't exceed the maximum.
+        Point next;
+        if (point_idx + 1 < size())
+        {
+            next = path->at(point_idx + 1);
+        }
+        else if (point_idx + 1 == size() && new_path.size() > 1)
+        { // don't spill over if the [next] vertex will then be equal to [previous]
+            next = new_path[0]; //Spill over to new polygon for checking removed area.
+        }
+        else
+        {
+            next = path->at((point_idx + 1) % size());
+        }
+
+        const coord_t removed_area_next = current.X * next.Y - current.Y * next.X; // Twice the Shoelace formula for area of polygon per line segment.
+        const coord_t negative_area_closing = next.X * previous.Y - next.Y * previous.X; // area between the origin and the short-cutting segment
+        accumulated_area_removed += removed_area_next;
+        
+        const coord_t length2 = vSize2(current - previous);
+        const coord_t next_length2 = vSize2(current - next);
+
+        const coord_t area_removed_so_far = accumulated_area_removed + negative_area_closing; // close the shortcut area polygon
+        const coord_t base_length_2 = vSize2(next - previous);
+
+        if (base_length_2 == 0) //Two line segments form a line back and forth with no area.
+        {
+            continue; //Remove the vertex.
+        }
+        //We want to check if the height of the triangle formed by previous, current and next vertices is less than allowed_error_distance_squared.
+        //1/2 L = A           [actual area is half of the computed shoelace value] // Shoelace formula is .5*(...) , but we simplify the computation and take out the .5
+        //A = 1/2 * b * h     [triangle area formula]
+        //L = b * h           [apply above two and take out the 1/2]
+        //h = L / b           [divide by b]
+        //h^2 = (L / b)^2     [square it]
+        //h^2 = L^2 / b^2     [factor the divisor]
+        const coord_t height_2 = area_removed_so_far * area_removed_so_far / base_length_2;
+        if ((height_2 <= 1 //Almost exactly colinear (barring rounding errors).
+            && LinearAlg2D::getDist2FromLine(current, previous, next) <= 1) // make sure that height_2 is not small because of cancellation of positive and negative areas
+            || (length2 < smallest_line_segment_squared
+                && next_length2 < smallest_line_segment_squared // Segments are small
+                && height_2 <= allowed_error_distance_squared) // removing the vertex doesn't introduce too much error.
+        )
+        {
+            continue; //Remove the vertex.
+        }
+
+        //Don't remove the vertex.
+
+        accumulated_area_removed = removed_area_next; // so that in the next iteration it's the area between the origin, [previous] and [current]
+        previous = current; //Note that "previous" is only updated if we don't remove the vertex.
+        new_path.push_back(current);
+    }
+    *path = new_path;
 }
 
 void PolygonRef::applyMatrix(const PointMatrix& matrix)
@@ -539,6 +469,59 @@ void Polygons::removeEmptyHoles_processPolyTreeNode(const ClipperLib::PolyNode& 
     }
 }
 
+void Polygons::removeSmallAreas(const double min_area_size, const bool remove_holes)
+{
+    std::vector<ConstPolygonRef> outlines_removed;
+    std::vector<size_t> small_hole_indices;
+    Polygons& thiss = *this;
+    for(size_t i = 0; i < size(); i++)
+    {
+        double area = INT2MM(INT2MM(thiss[i].area()));
+        // holes have negative area and small holes will be ignored unless remove_holes is true
+        // or the hole is contained within an outline that is itself smaller in area than the threshold
+        if (fabs(area) < min_area_size)
+        {
+            if (!remove_holes)
+            {
+                if (area > 0)
+                {
+                    // remember this outline has been removed so we can later check if it contains any holes that also need to be removed
+                    outlines_removed.push_back(thiss[i]);
+                }
+                else
+                {
+                    // remember this small hole so we can later check if it is contained within an outline that has been removed
+                    small_hole_indices.push_back(i);
+                }
+            }
+            // the polygon area is below the threshold, remove it if it is an outline or we are removing holes as well as outlines
+            if (area > 0 || remove_holes)
+            {
+                remove(i);
+                i -= 1;
+            }
+        }
+    }
+    if (outlines_removed.size() > 0 && small_hole_indices.size() > 0)
+    {
+        size_t num_holes_removed = 0;
+        // now remove any holes that are inside outlines that have been removed
+        for (size_t small_hole_index : small_hole_indices)
+        {
+            const size_t hole_index = small_hole_index - num_holes_removed; // adjust index to account for removed holes
+            // if hole polygon's first point is inside a removed polygon, remove the hole polygon also
+            for (ConstPolygonRef removed_outline : outlines_removed)
+            {
+                if (removed_outline.inside(thiss[hole_index][0]))
+                {
+                    remove(hole_index);
+                    ++num_holes_removed;
+                    break;
+                }
+            }
+        }
+    }
+}
 
 Polygons Polygons::toPolygons(ClipperLib::PolyTree& poly_tree)
 {
@@ -561,7 +544,7 @@ void Polygons::addPolyTreeNodeRecursive(const ClipperLib::PolyNode& node)
 bool ConstPolygonRef::smooth_corner_complex(const Point p1, ListPolyIt& p0_it, ListPolyIt& p2_it, const int64_t shortcut_length)
 {
     // walk away from the corner until the shortcut > shortcut_length or it would smooth a piece inward
-    // - walk in both directions untill shortcut > shortcut_length 
+    // - walk in both directions untill shortcut > shortcut_length
     // - stop walking in one direction if it would otherwise cut off a corner in that direction
     // - same in the other direction
     // - stop if both are cut off
@@ -832,8 +815,8 @@ void ConstPolygonRef::smooth_corner_simple(const Point p0, const Point p1, const
             Point a = p1 + normal(v10, a1_size);
             Point b = p1 + normal(v12, a1_size);
 #ifdef ASSERT_INSANE_OUTPUT
-            assert(vSize(a) < 400000);
-            assert(vSize(b) < 400000);
+            assert(vSize(a) < 4000000);
+            assert(vSize(b) < 4000000);
 #endif // #ifdef ASSERT_INSANE_OUTPUT
             ListPolyIt::insertPointNonDuplicate(p0_it, p1_it, a);
             ListPolyIt::insertPointNonDuplicate(p1_it, p2_it, b);
@@ -857,7 +840,7 @@ void ConstPolygonRef::smooth_corner_simple(const Point p0, const Point p1, const
             if (success)
             { // if not success then assume a is negligibly close to 0, but rounding errors caused a problem
 #ifdef ASSERT_INSANE_OUTPUT
-                assert(vSize(a) < 400000);
+                assert(vSize(a) < 4000000);
 #endif // #ifdef ASSERT_INSANE_OUTPUT
                 ListPolyIt::insertPointNonDuplicate(p0_it, p1_it, a);
             }
@@ -877,7 +860,7 @@ void ConstPolygonRef::smooth_corner_simple(const Point p0, const Point p1, const
             if (success)
             { // if not success then assume b is negligibly close to 2, but rounding errors caused a problem
 #ifdef ASSERT_INSANE_OUTPUT
-                assert(vSize(b) < 400000);
+                assert(vSize(b) < 4000000);
 #endif // #ifdef ASSERT_INSANE_OUTPUT
                 ListPolyIt::insertPointNonDuplicate(p1_it, p2_it, b);
             }
@@ -1196,6 +1179,11 @@ void Polygons::splitIntoParts_processPolyTreeNode(ClipperLib::PolyNode* node, st
     }
 }
 
+Polygons Polygons::tubeShape(const coord_t inner_offset, const coord_t outer_offset) const
+{
+    return this->offset(outer_offset).difference(this->offset(-inner_offset));
+}
+
 unsigned int PartsView::getPartContaining(unsigned int poly_idx, unsigned int* boundary_poly_idx) const
 {
     const PartsView& partsView = *this;
@@ -1204,8 +1192,8 @@ unsigned int PartsView::getPartContaining(unsigned int poly_idx, unsigned int* b
         const std::vector<unsigned int>& partView = partsView[part_idx_now];
         if (partView.size() == 0) { continue; }
         std::vector<unsigned int>::const_iterator result = std::find(partView.begin(), partView.end(), poly_idx);
-        if (result != partView.end()) 
-        { 
+        if (result != partView.end())
+        {
             if (boundary_poly_idx) { *boundary_poly_idx = partView[0]; }
             return part_idx_now;
         }
@@ -1251,7 +1239,7 @@ PartsView Polygons::splitIntoPartsView(bool unionAll)
         clipper.Execute(ClipperLib::ctUnion, resultPolyTree);
 
     splitIntoPartsView_processPolyTreeNode(partsView, reordered, &resultPolyTree);
-    
+
     (*this) = reordered;
     return partsView;
 }

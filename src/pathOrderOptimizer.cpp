@@ -1,4 +1,7 @@
-/** Copyright (C) 2013 Ultimaker - Released under terms of the AGPLv3 License */
+//Copyright (c) 2018 Ultimaker B.V.
+//CuraEngine is released under the terms of the AGPLv3 or higher.
+
+#include <map>
 #include "pathOrderOptimizer.h"
 #include "utils/logoutput.h"
 #include "utils/SparsePointGridInclusive.h"
@@ -10,13 +13,17 @@
 
 namespace cura {
 
+constexpr coord_t COINCIDENT_POINT_DISTANCE = 5; // In uM. Points closer than this may be considered overlapping / at the same place
+constexpr coord_t SQUARED_COINCIDENT_POINT_DISTANCE = COINCIDENT_POINT_DISTANCE * COINCIDENT_POINT_DISTANCE;
+
+
 /**
 *
 */
 void PathOrderOptimizer::optimize()
 {
-    bool picked[polygons.size()];
-    memset(picked, false, sizeof(bool) * polygons.size());/// initialized as falses
+    // NOTE: Keep this vector fixed-size, it replaces an (non-standard, sized at runtime) array:
+    std::vector<bool> picked(polygons.size(), false);
     loc_to_line = nullptr;
 
     for (unsigned poly_idx = 0; poly_idx < polygons.size(); ++poly_idx) /// find closest point to initial starting point within each polygon +initialize picked
@@ -72,27 +79,37 @@ void PathOrderOptimizer::optimize()
             if (dist2 < bestDist2 && combing_boundary)
             {
                 // using direct routing, this poly is the closest so far but as the combing boundary
-                // is available, get the combed distance and use that instead
+                // is available see if the travel would cross the combing boundary and, if so, either get
+                // the combed distance and use that instead or increase the distance to make it less attractive
                 if (PolygonUtils::polygonCollidesWithLineSegment(*combing_boundary, p, prev_point))
                 {
-                    if (!loc_to_line)
+                    if ((polygons.size() - poly_order_idx) > 100)
                     {
-                        // the combing boundary has been provided so do the initialisation
-                        // required to be able to calculate realistic travel distances to the start of new paths
-                        const int travel_avoid_distance = 2000; // assume 2mm - not really critical for our purposes
-                        loc_to_line = PolygonUtils::createLocToLineGrid(*combing_boundary, travel_avoid_distance);
+                        // calculating the combing distance for lots of polygons is too time consuming so, instead,
+                        // just increase the distance to penalise travels that hit the combing boundary
+                        dist2 *= 5;
                     }
-                    CombPath comb_path;
-                    if (LinePolygonsCrossings::comb(*combing_boundary, *loc_to_line, p, prev_point, comb_path, -40, 0, false))
+                    else
                     {
-                        float dist = 0;
-                        Point last_point = p;
-                        for (const Point& comb_point : comb_path)
+                        if (!loc_to_line)
                         {
-                            dist += vSize(comb_point - last_point);
-                            last_point = comb_point;
+                            // the combing boundary has been provided so do the initialisation
+                            // required to be able to calculate realistic travel distances to the start of new paths
+                            const int travel_avoid_distance = 2000; // assume 2mm - not really critical for our purposes
+                            loc_to_line = PolygonUtils::createLocToLineGrid(*combing_boundary, travel_avoid_distance);
                         }
-                        dist2 = dist * dist;
+                        CombPath comb_path;
+                        if (LinePolygonsCrossings::comb(*combing_boundary, *loc_to_line, p, prev_point, comb_path, -40, 0, false))
+                        {
+                            float dist = 0;
+                            Point last_point = p;
+                            for (const Point& comb_point : comb_path)
+                            {
+                                dist += vSize(comb_point - last_point);
+                                last_point = comb_point;
+                            }
+                            dist2 = dist * dist;
+                        }
                     }
                 }
             }
@@ -177,6 +194,17 @@ int PathOrderOptimizer::getClosestPointInPolygon(Point prev_point, int poly_idx)
                 // the more curved the region, the more we reduce the distance
                 dist_score -= fabs(corner_angle - 1) * corner_shift;
                 break;
+            case EZSeamCornerPrefType::Z_SEAM_CORNER_PREF_WEIGHTED:
+            {
+                //More curve is better score (reduced distance), but slightly in favour of concave curves.
+                float dist_score_corner = fabs(corner_angle - 1) * corner_shift;
+                if (corner_angle < 1)
+                {
+                    dist_score_corner *= 2;
+                }
+                dist_score -= dist_score_corner;
+                break;
+            }
             case EZSeamCornerPrefType::Z_SEAM_CORNER_PREF_NONE:
             default:
                 // do nothing
@@ -199,7 +227,7 @@ int PathOrderOptimizer::getRandomPointInPolygon(int poly_idx)
 
 static inline bool pointsAreCoincident(const Point& a, const Point& b)
 {
-    return vSize2(a - b) < 25; // points are closer than 5uM, consider them coincident
+    return vSize2(a - b) < SQUARED_COINCIDENT_POINT_DISTANCE; // points are closer than 5uM, consider them coincident
 }
 
 /**
@@ -209,7 +237,8 @@ void LineOrderOptimizer::optimize(bool find_chains)
 {
     const int grid_size = 2000; // the size of the cells in the hash grid. TODO
     SparsePointGridInclusive<unsigned int> line_bucket_grid(grid_size);
-    bool picked[polygons.size()];
+    // NOTE: Keep this vector fixed-size, it replaces an (non-standard, sized at runtime) array:
+    std::vector<bool> picked(polygons.size(), false);
 
     loc_to_line = nullptr;
 
@@ -233,7 +262,6 @@ void LineOrderOptimizer::optimize(bool find_chains)
 
         line_bucket_grid.insert(poly[0], poly_idx);
         line_bucket_grid.insert(poly[1], poly_idx);
-        picked[poly_idx] = false;
     }
 
     // a map with an entry for each chain end discovered
@@ -307,7 +335,7 @@ void LineOrderOptimizer::optimize(bool find_chains)
         float best_score = std::numeric_limits<float>::infinity(); // distance score for the best next line
 
         const int close_point_radius = 5000;
-        
+
         // for the first line we would prefer a line that is at the end of a sequence of connected lines (think zigzag) and
         // so we only consider the closest line when looking for the second line onwards
         if (order_idx > 0)
@@ -324,7 +352,7 @@ void LineOrderOptimizer::optimize(bool find_chains)
                 updateBestLine(close_line_idx, best_line_idx, best_score, prev_point);
             }
         }
-        
+
         if (best_line_idx == -1)
         {
             // we didn't find a chained line segment so now look for any lines that start within close_point_radius

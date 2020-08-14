@@ -1,18 +1,24 @@
 //Copyright (c) 2018 Ultimaker B.V.
 //CuraEngine is released under the terms of the AGPLv3 or higher.
+
 #ifndef SLICER_H
 #define SLICER_H
 
 #include <queue>
-
-#include "mesh.h"
+#include <unordered_map>
 #include "utils/polygon.h"
-#include "settings/AdaptiveLayerHeights.h"
+#include "settings/EnumSettings.h"
+
 /*
     The Slicer creates layers of polygons from an optimized 3D model.
     The result of the Slicer is a list of polygons without any order or structure.
 */
-namespace cura {
+namespace cura
+{
+
+class AdaptiveLayer;
+class Mesh;
+class MeshVertex;
 
 class SlicerSegment
 {
@@ -23,7 +29,7 @@ public:
     int endOtherFaceIdx = -1;
     // If end corresponds to a vertex of the mesh, then this is populated
     // with the vertex that it ended on.
-    const MeshVertex *endVertex = nullptr;
+    const MeshVertex* endVertex = nullptr;
     bool addedToPolygon = false;
 };
 
@@ -32,15 +38,15 @@ class ClosePolygonResult
     //The line on which the point lays is between pointIdx-1 and pointIdx
 public:
     int polygonIdx = -1;
-    unsigned int pointIdx = -1;
+    size_t pointIdx = -1;
 };
 class GapCloserResult
 {
 public:
-    int64_t len = -1;
+    coord_t len = -1;
     int polygonIdx = -1;
-    unsigned int pointIdxA = -1;
-    unsigned int pointIdxB = -1;
+    size_t pointIdxA = -1;
+    size_t pointIdxB = -1;
     bool AtoB = false;
 };
 
@@ -58,9 +64,8 @@ public:
      * \brief Connect the segments into polygons for this layer of this \p mesh.
      * \param[in] mesh The mesh data for which we are connecting sliced
      * segments. The face data is used.
-     * \param is_initial_layer Whether this is the first layer of the mesh data.
      */
-    void makePolygons(const Mesh* mesh, bool is_initial_layer);
+    void makePolygons(const Mesh* mesh);
 
 protected:
     /*!
@@ -76,7 +81,7 @@ protected:
      * \param[in,out] open_polylines The polylines which are stiched, but couldn't be closed into a loop
      * \param[in] start_segment_idx The index into SlicerLayer::segments for the first segment from which to start the polygon loop
      */
-    void makeBasicPolygonLoop(Polygons& open_polylines, unsigned int start_segment_idx);
+    void makeBasicPolygonLoop(Polygons& open_polylines, const size_t start_segment_idx);
 
     /*!
      * Get the next segment connected to the end of \p segment.
@@ -86,7 +91,7 @@ protected:
      * \param[in] segment The segment from which to start looking for the next
      * \param[in] start_segment_idx The index to the segment which when conected to \p segment will immediately stop looking for further candidates.
      */
-    int getNextSegmentIdx(const SlicerSegment& segment, unsigned int start_segment_idx);
+    int getNextSegmentIdx(const SlicerSegment& segment, const size_t start_segment_idx) const;
 
     /*!
      * Connecting polygons that are not closed yet, as models are not always perfect manifold we need to join some stuff up to get proper polygons.
@@ -394,7 +399,7 @@ private:
      * \param[in] start_segment_idx The index of the segment that started this polyline.
      */
     int tryFaceNextSegmentIdx(const SlicerSegment& segment,
-                              int face_idx, unsigned int start_segment_idx) const;
+                              const int face_idx, const size_t start_segment_idx) const;
 
     /*!
      * Find possible allowed stitches in goodness order.
@@ -488,6 +493,9 @@ public:
 
     Slicer(Mesh* mesh, const coord_t thickness, const size_t slice_layer_count, bool use_variable_layer_heights, std::vector<AdaptiveLayer> *adaptive_layers);
 
+
+private:
+
     /*!
      * \brief Linear interpolation between coordinates of a line.
      *
@@ -500,21 +508,57 @@ public:
      * \param y1 The Y coordinate of the second end point of the line segment.
      * \return The Y coordinate of the point to find.
      */
-    coord_t interpolate(const coord_t x, const coord_t x0, const coord_t x1, const coord_t y0, const coord_t y1) const;
+    static coord_t interpolate(const coord_t x, const coord_t x0, const coord_t x1, const coord_t y0, const coord_t y1);
 
-    SlicerSegment project2D(Point3& p0, Point3& p1, Point3& p2, int32_t z) const
-    {
-        SlicerSegment seg;
+    /*!
+     * \brief Project a triangle onto a 2D layer.
+     *
+     * The result is a SlicerSegment object, which is a line segment if the
+     * triangle properly intersects the layer, a point if it's an edge case, or
+     * nothing if the triangle doesn't intersect the layer.
+     * \param p0 A corner of the triangle.
+     * \param p1 A corner of the triangle.
+     * \param p2 A corner of the triangle.
+     * \param z The Z coordinate of the layer to intersect with.
+     * \return A slicer segment.
+     */
+    static SlicerSegment project2D(const Point3& p0, const Point3& p1, const Point3& p2, const coord_t z);;
 
-        seg.start.X = interpolate(z, p0.z, p1.z, p0.x, p1.x);
-        seg.start.Y = interpolate(z, p0.z, p1.z, p0.y, p1.y);
-        seg.end  .X = interpolate(z, p0.z, p2.z, p0.x, p2.x);
-        seg.end  .Y = interpolate(z, p0.z, p2.z, p0.y, p2.y);
+    /*! Creates an array of "z bounding boxes" for each face. 
+    * \param[in] mesh The mesh which is analyzed.
+    * \return z heights aka z bounding boxes of the faces.
+    */
+    static std::vector<std::pair<int32_t, int32_t>> buildZHeightsForFaces(const Mesh &mesh);
 
-        return seg;
-    }
+    /*! Creates the polygons in layers. 
+    * \param[in] mesh The mesh which is analyzed.
+    * \param[in] slicing_tolerance The way the slicing tolerance should be applied (MIDDLE/INCLUSIVE/EXCLUSIVE).
+    * \param[in, out] layers The polygon are created here.
+    */
+    static void makePolygons(Mesh& mesh, SlicingTolerance slicing_tolerance, std::vector<SlicerLayer>& layers);
 
-    void dumpSegmentsToHTML(const char* filename);
+    /*! Creates a vector of layers and set their z value. 
+    * \param[in] mesh The mesh which is analyzed.
+    * \param[in] slice_layer_count The amount of layers which shall be sliced.
+    * \param[in] slicing_tolerance The way the slicing tolerance should be applied (MIDDLE/INCLUSIVE/EXCLUSIVE).
+    * \param[in] initial_layer_thickness Thickness of the first layer.
+    * \param[in] thickness Thickness of the layers (apart the first one).
+    * \param[in] use_variable_layer_heights Shall we use adaptive layer heights.
+    * \param[in] adaptive_layers Adaptive layers (if use_variable_layer_heights).
+    * \return layers with set z values.
+    */
+    static std::vector<SlicerLayer> buildLayersWithHeight(size_t slice_layer_count, SlicingTolerance slicing_tolerance,
+        coord_t initial_layer_thickness, coord_t thickness, bool use_variable_layer_heights,
+        const std::vector<AdaptiveLayer>* adaptive_layers);
+
+    /*! Creates the segments and write them into the layers. 
+    * \param[in] mesh The mesh which is analyzed.
+    * \param[in] zbboxes The z part of the bounding boxes of the faces of the mesh.
+    * \param[in, out] layers The segments are created here.
+    */
+    static void buildSegments(const Mesh& mesh, const std::vector<std::pair<int32_t, int32_t>> &zbboxes,
+        std::vector<SlicerLayer>& layers);
+
 };
 
 }//namespace cura

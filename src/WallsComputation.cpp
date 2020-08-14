@@ -1,8 +1,13 @@
 //Copyright (c) 2018 Ultimaker B.V.
 //CuraEngine is released under the terms of the AGPLv3 or higher.
 
+#include "ExtruderTrain.h"
+#include "sliceDataStorage.h"
 #include "WallsComputation.h"
+#include "settings/types/Ratio.h"
+#include "settings/EnumSettings.h"
 #include "utils/polygonUtils.h"
+
 namespace cura {
 
 WallsComputation::WallsComputation(const Settings& settings, const LayerIndex layer_nr)
@@ -21,7 +26,7 @@ void WallsComputation::generateInsets(SliceLayerPart* part)
 {
     size_t inset_count = settings.get<size_t>("wall_line_count");
     const bool spiralize = settings.get<bool>("magic_spiralize");
-    if (spiralize && layer_nr < LayerIndex(settings.get<size_t>("bottom_layers")) && ((layer_nr % 2) + 2) % 2 == 1) //Add extra insets every 2 layers when spiralizing. This makes bottoms of cups watertight.
+    if (spiralize && layer_nr < LayerIndex(settings.get<size_t>("initial_bottom_layers")) && ((layer_nr % 2) + 2) % 2 == 1) //Add extra insets every 2 layers when spiralizing. This makes bottoms of cups watertight.
     {
         inset_count += 5;
     }
@@ -48,7 +53,9 @@ void WallsComputation::generateInsets(SliceLayerPart* part)
         line_width_x *= train_wall_x.settings.get<Ratio>("initial_layer_line_width_factor");
     }
 
-    const bool recompute_outline_based_on_outer_wall = (settings.get<bool>("support_enable") || settings.get<bool>("support_tree_enable")) && !settings.get<bool>("fill_outline_gaps");
+    const bool recompute_outline_based_on_outer_wall =
+        settings.get<bool>("support_enable") &&
+        !settings.get<bool>("fill_outline_gaps");
     for(size_t i = 0; i < inset_count; i++)
     {
         part->insets.push_back(Polygons());
